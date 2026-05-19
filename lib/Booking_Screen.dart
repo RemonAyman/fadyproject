@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'api_service.dart';
 import 'dart:ui';
 import 'package:intl/intl.dart' as intl;
 
@@ -65,15 +64,11 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     }
 
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('craftsmen')
-          .doc(widget.craftsmanId)
-          .get();
+      final doc = await ApiService().getCraftsmanDetails(widget.craftsmanId!);
 
-      if (doc.exists) {
+      if (doc != null) {
         setState(() {
-          _craftsmanData = doc.data();
-          // تعبئة السعر تلقائياً
+          _craftsmanData = doc;
           _priceController.text = _craftsmanData?['price']?.toString() ?? '0';
         });
       }
@@ -106,15 +101,15 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     setState(() => _isLoading = true);
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
+      final userId = await ApiService().getUserId();
+      if (userId == null) {
         throw Exception('يجب تسجيل الدخول أولاً');
       }
 
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
+      final userDoc = await ApiService().getUserProfile(userId);
+      if (userDoc == null) {
+        throw Exception('فشل في جلب بيانات العميل');
+      }
 
       final bookingData = {
         'title': _titleController.text.trim(),
@@ -122,24 +117,26 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         'serviceType': _selectedService,
         'location': _addressController.text.trim(),
         'expectedPrice': double.tryParse(_priceController.text) ?? 0,
-        'appointmentDate': Timestamp.fromDate(_selectedDate!),
+        'appointmentDate': _selectedDate!.toIso8601String(),
         'appointmentTime': '${_selectedTime!.hour}:${_selectedTime!.minute.toString().padLeft(2, '0')}',
         'craftsmanId': widget.craftsmanId,
-        'craftsmanName': widget.craftsmanName ?? _craftsmanData?['name'] ?? 'غير معروف',
-        'craftsmanCategory': widget.craftsmanCategory ?? _craftsmanData?['category'] ?? 'عام',
-        'customerId': user.uid,
-        'customerName': userDoc.data()?['name'] ?? 'عميل حِرَفي',
-        'customerPhone': userDoc.data()?['phone'] ?? '',
-        'status': 'new', // ✅ وضع الحالة "new" لتظهر كطلب جديد
-        'createdAt': FieldValue.serverTimestamp(),
-      }; // ✅ إغلاق الـ Map بشكل صحيح
+        'craftsmanName': (widget.craftsmanName != null && widget.craftsmanName!.isNotEmpty) ? widget.craftsmanName : (_craftsmanData?['name'] ?? 'غير معروف'),
+        'craftsmanCategory': (widget.craftsmanCategory != null && widget.craftsmanCategory!.isNotEmpty) ? widget.craftsmanCategory : (_craftsmanData?['category'] ?? 'عام'),
+        'customerId': userId,
+        'customerName': (userDoc['name'] != null && userDoc['name'].toString().isNotEmpty) ? userDoc['name'] : 'عميل حِرَفي',
+        'customerPhone': (userDoc['phone'] != null && userDoc['phone'].toString().isNotEmpty) ? userDoc['phone'] : 'غير متوفر',
+        'status': 'new',
+      };
 
-      // حفظ في مجموعة bookings كما طلب المستخدم
-      await FirebaseFirestore.instance.collection('bookings').add(bookingData);
+      final response = await ApiService().createBooking(bookingData);
 
       if (mounted) {
         setState(() => _isLoading = false);
-        _showSuccessDialog();
+        if (response['success'] == true) {
+          _showSuccessDialog();
+        } else {
+          _showSnackBar(response['error'] ?? 'فشل إرسال طلب الحجز', isError: true);
+        }
       }
     } catch (e) {
       if (mounted) {

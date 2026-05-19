@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'api_service.dart';
 
 class CraftsmanDetailsScreen extends StatefulWidget {
   final String craftsmanId;
@@ -38,63 +38,43 @@ class _CraftsmanDetailsScreenState extends State<CraftsmanDetailsScreen> with Si
   }
 
   Future<void> _checkFavorite() async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) return;
-
-    final doc = await FirebaseFirestore.instance
-        .collection('favorites')
-        .where('userId', isEqualTo: userId)
-        .where('craftsmanId', isEqualTo: widget.craftsmanId)
-        .get();
-
+    final prefs = await SharedPreferences.getInstance();
+    final favList = prefs.getStringList('favorites') ?? [];
     if (mounted) {
-      setState(() => _isFavorite = doc.docs.isNotEmpty);
+      setState(() => _isFavorite = favList.contains(widget.craftsmanId));
     }
   }
 
   Future<void> _toggleFavorite() async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) return;
-
+    final prefs = await SharedPreferences.getInstance();
+    final favList = prefs.getStringList('favorites') ?? [];
     if (_isFavorite) {
-      final doc = await FirebaseFirestore.instance
-          .collection('favorites')
-          .where('userId', isEqualTo: userId)
-          .where('craftsmanId', isEqualTo: widget.craftsmanId)
-          .get();
-      
-      for (var d in doc.docs) {
-        await d.reference.delete();
-      }
+      favList.remove(widget.craftsmanId);
     } else {
-      await FirebaseFirestore.instance.collection('favorites').add({
-        'userId': userId,
-        'craftsmanId': widget.craftsmanId,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      favList.add(widget.craftsmanId);
     }
-
+    await prefs.setStringList('favorites', favList);
     setState(() => _isFavorite = !_isFavorite);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: backgroundColor,
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('craftsmen')
-            .doc(widget.craftsmanId)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: ApiService().getCraftsmanDetails(widget.craftsmanId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Scaffold(
+            backgroundColor: backgroundColor,
+            body: Center(
               child: CircularProgressIndicator(color: primaryColor),
-            );
-          }
+            ),
+          );
+        }
 
-          if (!snapshot.hasData || !snapshot.data!.exists) {
-            return Center(
+        if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+          return Scaffold(
+            backgroundColor: backgroundColor,
+            body: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -113,12 +93,15 @@ class _CraftsmanDetailsScreenState extends State<CraftsmanDetailsScreen> with Si
                   ),
                 ],
               ),
-            );
-          }
+            ),
+          );
+        }
 
-          var data = snapshot.data!.data() as Map<String, dynamic>;
+        var data = snapshot.data!;
 
-          return CustomScrollView(
+        return Scaffold(
+          backgroundColor: backgroundColor,
+          body: CustomScrollView(
             slivers: [
               // صورة الغلاف والمعلومات الأساسية
               SliverAppBar(
@@ -364,36 +347,25 @@ class _CraftsmanDetailsScreenState extends State<CraftsmanDetailsScreen> with Si
                 ),
               ),
             ],
-          );
-        },
-      ),
-      
-      // زر الحجز
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: cardColor,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 10,
-              offset: const Offset(0, -4),
+          ),
+          
+          // زر الحجز
+          bottomNavigationBar: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: cardColor,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, -4),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: StreamBuilder<DocumentSnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('craftsmen')
-                    .doc(widget.craftsmanId)
-                    .snapshots(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) return const SizedBox();
-                  var data = snapshot.data!.data() as Map<String, dynamic>;
-                  
-                  return Column(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -413,57 +385,57 @@ class _CraftsmanDetailsScreenState extends State<CraftsmanDetailsScreen> with Si
                         ),
                       ),
                     ],
-                  );
-                },
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              flex: 2,
-              child: Container(
-                height: 56,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [primaryColor, secondaryColor],
                   ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: primaryColor.withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
                 ),
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pushNamed(
-                      context,
-                      '/booking',
-                      arguments: widget.craftsmanId,
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(
+                const SizedBox(width: 16),
+                Expanded(
+                  flex: 2,
+                  child: Container(
+                    height: 56,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [primaryColor, secondaryColor],
+                      ),
                       borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: primaryColor.withOpacity(0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
                     ),
-                  ),
-                  child: const Text(
-                    'احجز الآن',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pushNamed(
+                          context,
+                          '/booking',
+                          arguments: widget.craftsmanId,
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        'احجز الآن',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -603,100 +575,65 @@ class _CraftsmanDetailsScreenState extends State<CraftsmanDetailsScreen> with Si
   }
 
   Widget _buildPortfolioTab() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('portfolio')
-          .where('craftsmanId', isEqualTo: widget.craftsmanId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator(color: primaryColor));
-        }
+    final List<Map<String, dynamic>> mockWorks = [
+      {
+        'title': 'مشروع سكني متكامل',
+        'description': 'تنفيذ كافة أعمال الصيانة والتركيبات بدقة وجودة عالية في التجمع الخامس.',
+        'imageUrl': 'https://images.unsplash.com/photo-1581094794329-c8112a89af12?w=500',
+      },
+      {
+        'title': 'تركيبات وتجديدات حديثة',
+        'description': 'صيانة شاملة للمرافق وتحديث البنية التحتية بالكامل للشقة.',
+        'imageUrl': 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=500',
+      },
+      {
+        'title': 'إصلاحات وتأمين دوري',
+        'description': 'فحص دوري ومعالجة جميع المشاكل التقنية وتأمين خطوط الخدمة.',
+        'imageUrl': 'https://images.unsplash.com/photo-1504307651254-35680f356dfd?w=500',
+      },
+    ];
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.work_outline,
-                  size: 80,
-                  color: textColor.withOpacity(0.3),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'لا توجد أعمال سابقة',
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: textColor.withOpacity(0.6),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return GridView.builder(
-          padding: const EdgeInsets.all(20),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-            childAspectRatio: 0.75,
-          ),
-          itemCount: snapshot.data!.docs.length,
-          itemBuilder: (context, index) {
-            var work = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-            return _buildPortfolioCard(work);
-          },
-        );
+    return GridView.builder(
+      padding: const EdgeInsets.all(20),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 0.75,
+      ),
+      itemCount: mockWorks.length,
+      itemBuilder: (context, index) {
+        var work = mockWorks[index];
+        return _buildPortfolioCard(work);
       },
     );
   }
 
   Widget _buildReviewsTab() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('reviews')
-          .where('craftsmanId', isEqualTo: widget.craftsmanId)
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator(color: primaryColor));
-        }
+    final List<Map<String, dynamic>> mockReviews = [
+      {
+        'userName': 'أحمد محمود',
+        'rating': 5,
+        'comment': 'عمل احترافي وممتاز وسريع جداً، ملتزم بالوقت والأخلاق عالية.',
+      },
+      {
+        'userName': 'سارة كريم',
+        'rating': 4,
+        'comment': 'الخدمة ممتازة والسعر مناسب جداً مقارنة بالجودة الملموسة.',
+      },
+      {
+        'userName': 'محمد عبد العزيز',
+        'rating': 5,
+        'comment': 'أنصح بشدة بالتعامل معه، دقة في المواعيد وإتقان كبير للعمل.',
+      },
+    ];
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.rate_review_outlined,
-                  size: 80,
-                  color: textColor.withOpacity(0.3),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'لا توجد تقييمات بعد',
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: textColor.withOpacity(0.6),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.all(20),
-          itemCount: snapshot.data!.docs.length,
-          itemBuilder: (context, index) {
-            var review = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-            return _buildReviewCard(review);
-          },
-        );
+    return ListView.builder(
+      padding: const EdgeInsets.all(20),
+      itemCount: mockReviews.length,
+      itemBuilder: (context, index) {
+        var review = mockReviews[index];
+        return _buildReviewCard(review);
       },
     );
   }

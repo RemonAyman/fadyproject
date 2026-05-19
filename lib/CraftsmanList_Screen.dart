@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'api_service.dart';
 
 class CraftsmanListScreen extends StatefulWidget {
   final String? categoryName;
@@ -15,8 +15,14 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
   String _searchQuery = '';
   String _sortBy = 'rating'; // rating, price, experience
   bool _showAvailableOnly = true;
-  double _maxPrice = 500;
+  double _maxPrice = 1000;
   double _minRating = 0;
+  String? _selectedCity;
+  
+  final List<String> _cities = [
+    'الكل', 'القاهرة', 'الجيزة', 'الإسكندرية', 'الشرقية', 'الدقهلية',
+    'البحيرة', 'الغربية', 'المنوفية', 'القليوبية', 'أخرى'
+  ];
 
   // ألوان عصرية
   final Color primaryColor = const Color(0xFF6C63FF);
@@ -169,11 +175,17 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
                 ],
               ),
             ),
-            
-            // قائمة الحرفيين
             Expanded(
-              child: StreamBuilder<QuerySnapshot>(
-                stream: _buildQuery(),
+              child: FutureBuilder<List<dynamic>>(
+                future: ApiService().getAllCraftsmen(
+                  category: widget.categoryName,
+                  city: _selectedCity,
+                  minRating: _minRating > 0 ? _minRating : null,
+                  maxPrice: _maxPrice,
+                  isAvailable: _showAvailableOnly ? true : null,
+                  search: _searchQuery.isNotEmpty ? _searchQuery : null,
+                  sortBy: _sortBy,
+                ),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return Center(
@@ -217,7 +229,7 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
                     );
                   }
 
-                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
                     return Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -248,43 +260,66 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
                     );
                   }
 
-                  var craftsmen = snapshot.data!.docs;
+                  var rawCraftsmen = snapshot.data!;
+                  var craftsmen = rawCraftsmen.map((item) => item as Map<String, dynamic>).toList();
                   
-                  // تطبيق البحث المحلي
+                  // Filter by category if categoryName is provided
+                  if (widget.categoryName != null) {
+                    craftsmen = craftsmen.where((item) => item['category'] == widget.categoryName).toList();
+                  }
+
+                  // Filter by availability if _showAvailableOnly is true
+                  if (_showAvailableOnly) {
+                    craftsmen = craftsmen.where((item) => item['isAvailable'] == true).toList();
+                  }
+                  
+                  // تطبيق فلتر المدينة المحلي
+                  if (_selectedCity != null && _selectedCity != 'الكل') {
+                    craftsmen = craftsmen.where((item) {
+                      var city = item['city']?.toString().toLowerCase() ?? '';
+                      var address = item['address']?.toString().toLowerCase() ?? '';
+                      var targetCity = _selectedCity!.toLowerCase();
+                      return city.contains(targetCity) || address.contains(targetCity);
+                    }).toList();
+                  }
+                  
+                  // تطبيق البحث المحلي (البحث بالاسم، الحرفة، الحي، المدينة، النبذة الشخصية)
                   if (_searchQuery.isNotEmpty) {
-                    craftsmen = craftsmen.where((doc) {
-                      var data = doc.data() as Map<String, dynamic>;
-                      var name = data['name']?.toString().toLowerCase() ?? '';
-                      var location = data['location']?.toString().toLowerCase() ?? '';
+                    craftsmen = craftsmen.where((item) {
+                      var name = item['name']?.toString().toLowerCase() ?? '';
+                      var category = item['category']?.toString().toLowerCase() ?? '';
+                      var city = item['city']?.toString().toLowerCase() ?? '';
+                      var address = item['address']?.toString().toLowerCase() ?? '';
+                      var bio = item['bio']?.toString().toLowerCase() ?? '';
                       var query = _searchQuery.toLowerCase();
-                      return name.contains(query) || location.contains(query);
+                      return name.contains(query) || 
+                             category.contains(query) || 
+                             city.contains(query) || 
+                             address.contains(query) || 
+                             bio.contains(query);
                     }).toList();
                   }
                   
                   // تطبيق فلتر التقييم والسعر
-                  craftsmen = craftsmen.where((doc) {
-                    var data = doc.data() as Map<String, dynamic>;
-                    var rating = data['rating']?.toDouble() ?? 0.0;
-                    var price = double.tryParse(data['price']?.toString() ?? '0') ?? 0.0;
+                  craftsmen = craftsmen.where((item) {
+                    var rating = (item['rating'] as num?)?.toDouble() ?? 5.0;
+                    var price = double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
                     return rating >= _minRating && price <= _maxPrice;
                   }).toList();
                   
                   // الترتيب
                   craftsmen.sort((a, b) {
-                    var dataA = a.data() as Map<String, dynamic>;
-                    var dataB = b.data() as Map<String, dynamic>;
-                    
                     if (_sortBy == 'rating') {
-                      var ratingA = dataA['rating']?.toDouble() ?? 0.0;
-                      var ratingB = dataB['rating']?.toDouble() ?? 0.0;
+                      var ratingA = (a['rating'] as num?)?.toDouble() ?? 5.0;
+                      var ratingB = (b['rating'] as num?)?.toDouble() ?? 5.0;
                       return ratingB.compareTo(ratingA);
                     } else if (_sortBy == 'price') {
-                      var priceA = double.tryParse(dataA['price']?.toString() ?? '0') ?? 0.0;
-                      var priceB = double.tryParse(dataB['price']?.toString() ?? '0') ?? 0.0;
+                      var priceA = double.tryParse(a['price']?.toString() ?? '0') ?? 0.0;
+                      var priceB = double.tryParse(b['price']?.toString() ?? '0') ?? 0.0;
                       return priceA.compareTo(priceB);
                     } else if (_sortBy == 'experience') {
-                      var expA = int.tryParse(dataA['experience']?.toString() ?? '0') ?? 0;
-                      var expB = int.tryParse(dataB['experience']?.toString() ?? '0') ?? 0;
+                      var expA = int.tryParse(a['experience']?.toString() ?? '0') ?? 0;
+                      var expB = int.tryParse(b['experience']?.toString() ?? '0') ?? 0;
                       return expB.compareTo(expA);
                     }
                     return 0;
@@ -325,16 +360,16 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 20),
                           itemCount: craftsmen.length,
                           itemBuilder: (context, index) {
-                            var data = craftsmen[index].data() as Map<String, dynamic>;
+                            var data = craftsmen[index];
                             return _buildCraftsmanCard(
-                              craftsmanId: craftsmen[index].id,
+                              craftsmanId: data['_id'] ?? '',
                               name: data['name'] ?? 'غير معروف',
                               category: data['category'] ?? 'عام',
-                              rating: data['rating']?.toDouble() ?? 4.5,
+                              rating: (data['rating'] as num?)?.toDouble() ?? 5.0,
                               price: data['price']?.toString() ?? '100',
-                              imageUrl: data['imageUrl'],
+                              imageUrl: data['imageUrl'] ?? data['photoUrl'],
                               experience: data['experience']?.toString() ?? '5',
-                              location: data['location'] ?? 'القاهرة',
+                              location: data['city'] ?? data['address'] ?? 'القاهرة',
                               isAvailable: data['isAvailable'] ?? true,
                               completedJobs: data['completedJobs'] ?? 0,
                             );
@@ -350,20 +385,6 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
         ),
       ),
     );
-  }
-
-  Stream<QuerySnapshot> _buildQuery() {
-    Query query = FirebaseFirestore.instance.collection('craftsmen');
-    
-    if (widget.categoryName != null) {
-      query = query.where('category', isEqualTo: widget.categoryName);
-    }
-    
-    if (_showAvailableOnly) {
-      query = query.where('isAvailable', isEqualTo: true);
-    }
-    
-    return query.snapshots();
   }
 
   Widget _buildQuickFilterChip(
@@ -752,9 +773,9 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
               ),
               Slider(
                 value: _maxPrice,
-                min: 50,
-                max: 500,
-                divisions: 45,
+                min: 10,
+                max: 1000,
+                divisions: 99,
                 activeColor: primaryColor,
                 inactiveColor: primaryColor.withOpacity(0.2),
                 onChanged: (value) {
@@ -785,7 +806,89 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
                 },
               ),
               
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              
+              // فلتر المدينة
+              Text(
+                'المنطقة / المدينة:',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: _selectedCity ?? 'الكل',
+                    items: _cities.map((city) => DropdownMenuItem(
+                      value: city,
+                      child: Text(city, style: TextStyle(color: textColor, fontWeight: FontWeight.bold)),
+                    )).toList(),
+                    onChanged: (v) {
+                      setModalState(() {
+                        _selectedCity = v == 'الكل' ? null : v;
+                      });
+                    },
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // فلتر الترتيب
+              Text(
+                'الترتيب حسب:',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: _sortBy,
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'rating',
+                        child: Text('الأعلى تقييماً ⭐', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                      DropdownMenuItem(
+                        value: 'price',
+                        child: Text('الأقل سعراً 💵', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                      DropdownMenuItem(
+                        value: 'experience',
+                        child: Text('الأكثر خبرة 🛠️', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      setModalState(() {
+                        if (v != null) _sortBy = v;
+                      });
+                    },
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 28),
               
               // زر التطبيق
               Container(
@@ -832,13 +935,16 @@ class _CraftsmanListScreenState extends State<CraftsmanListScreen> {
               TextButton(
                 onPressed: () {
                   setModalState(() {
-                    _maxPrice = 500;
+                    _maxPrice = 1000;
                     _minRating = 0;
+                    _selectedCity = null;
+                    _sortBy = 'rating';
+                    _showAvailableOnly = true;
                   });
                   setState(() {});
                 },
                 child: Text(
-                  'إعادة تعيين',
+                  'إعادة تعيين الكل',
                   style: TextStyle(
                     color: accentColor,
                     fontWeight: FontWeight.bold,

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui';
+import 'api_service.dart';
 
 class TodoScreen extends StatefulWidget {
   const TodoScreen({Key? key}) : super(key: key);
@@ -11,14 +10,14 @@ class TodoScreen extends StatefulWidget {
 }
 
 class _TodoScreenState extends State<TodoScreen> with TickerProviderStateMixin {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  
   late AnimationController _fadeController;
   
   final _todoController = TextEditingController();
   String _filterStatus = 'all'; // all, pending, completed
 
+  List<dynamic> _todos = [];
+  bool _isLoading = false;
+  
   // لوحة ألوان فخمة (بنفسجي نيون)
   final Color primaryColor = const Color(0xFF6A1B9A);
   final Color accentColor = const Color(0xFFAB47BC);
@@ -35,31 +34,33 @@ class _TodoScreenState extends State<TodoScreen> with TickerProviderStateMixin {
       vsync: this,
     );
     _fadeController.forward();
+    _fetchTodos();
   }
 
-  @override
-  void dispose() {
-    _todoController.dispose();
-    _fadeController.dispose();
-    super.dispose();
-  }
-
-  // --- منطق البيانات (Logic) ---
-
-  Stream<QuerySnapshot> _getTodosStream() {
-    User? user = _auth.currentUser;
-    if (user == null) return const Stream.empty();
-    
-    Query query = _firestore.collection('todos')
-        .where('userId', isEqualTo: user.uid)
-        .orderBy('createdAt', descending: true);
-    
-    if (_filterStatus == 'pending') {
-      query = query.where('completed', isEqualTo: false);
-    } else if (_filterStatus == 'completed') {
-      query = query.where('completed', isEqualTo: true);
+  Future<void> _fetchTodos() async {
+    setState(() => _isLoading = true);
+    try {
+      final userId = await ApiService().getUserId();
+      if (userId != null) {
+        final data = await ApiService().getTodosForUser(userId);
+        setState(() {
+          _todos = data;
+        });
+      }
+    } catch (e) {
+      _showSnackBar('خطأ في تحميل المهام', Colors.red);
+    } finally {
+      setState(() => _isLoading = false);
     }
-    return query.snapshots();
+  }
+
+  List<dynamic> get _filteredTodos {
+    if (_filterStatus == 'pending') {
+      return _todos.where((todo) => todo['completed'] == false).toList();
+    } else if (_filterStatus == 'completed') {
+      return _todos.where((todo) => todo['completed'] == true).toList();
+    }
+    return _todos;
   }
 
   // --- بناء الواجهة (UI Construction) ---
@@ -112,26 +113,21 @@ class _TodoScreenState extends State<TodoScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildStatsSummary() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore.collection('todos').where('userId', isEqualTo: _auth.currentUser?.uid).snapshots(),
-      builder: (context, snapshot) {
-        int total = snapshot.hasData ? snapshot.data!.docs.length : 0;
-        int completed = snapshot.hasData ? snapshot.data!.docs.where((d) => d['completed'] == true).length : 0;
-        int pending = total - completed;
+    int total = _todos.length;
+    int completed = _todos.where((d) => d['completed'] == true).length;
+    int pending = total - completed;
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          child: Row(
-            children: [
-              _buildStatChip('الكل', total.toString(), Colors.white24),
-              const SizedBox(width: 10),
-              _buildStatChip('قيد التنفيذ', pending.toString(), Colors.orangeAccent.withOpacity(0.3)),
-              const SizedBox(width: 10),
-              _buildStatChip('مكتملة', completed.toString(), successColor.withOpacity(0.3)),
-            ],
-          ),
-        );
-      },
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
+        children: [
+          _buildStatChip('الكل', total.toString(), Colors.white24),
+          const SizedBox(width: 10),
+          _buildStatChip('قيد التنفيذ', pending.toString(), Colors.orangeAccent.withOpacity(0.3)),
+          const SizedBox(width: 10),
+          _buildStatChip('مكتملة', completed.toString(), successColor.withOpacity(0.3)),
+        ],
+      ),
     );
   }
 
@@ -144,23 +140,18 @@ class _TodoScreenState extends State<TodoScreen> with TickerProviderStateMixin {
       ),
       child: ClipRRect(
         borderRadius: const BorderRadius.only(topLeft: Radius.circular(40), topRight: Radius.circular(40)),
-        child: StreamBuilder<QuerySnapshot>(
-          stream: _getTodosStream(),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-            if (snapshot.data!.docs.isEmpty) return _buildEmptyState();
-
-            return ListView.builder(
-              padding: const EdgeInsets.fromLTRB(20, 30, 20, 100),
-              itemCount: snapshot.data!.docs.length,
-              itemBuilder: (context, index) {
-                var todo = snapshot.data!.docs[index];
-                var data = todo.data() as Map<String, dynamic>;
-                return _buildTaskCard(todo.id, data, index);
-              },
-            );
-          },
-        ),
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _filteredTodos.isEmpty
+                ? _buildEmptyState()
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(20, 30, 20, 100),
+                    itemCount: _filteredTodos.length,
+                    itemBuilder: (context, index) {
+                      var todo = _filteredTodos[index];
+                      return _buildTaskCard(todo['_id'] ?? todo['id'], todo, index);
+                    },
+                  ),
       ),
     );
   }
@@ -330,26 +321,49 @@ class _TodoScreenState extends State<TodoScreen> with TickerProviderStateMixin {
   Future<void> _addTodo() async {
     if (_todoController.text.trim().isEmpty) return;
     try {
-      await _firestore.collection('todos').add({
-        'userId': _auth.currentUser!.uid,
-        'title': _todoController.text.trim(),
-        'completed': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      _todoController.clear();
-      if (mounted) Navigator.pop(context);
-      _showSnackBar('تم إضافة المهمة بنجاح ✅', Colors.green);
+      final userId = await ApiService().getUserId();
+      if (userId == null) return;
+      final res = await ApiService().createTodo(userId, _todoController.text.trim());
+      if (res['success'] == true) {
+        _todoController.clear();
+        if (mounted) Navigator.pop(context);
+        _fetchTodos();
+        _showSnackBar('تم إضافة المهمة بنجاح ✅', Colors.green);
+      } else {
+        _showSnackBar(res['error'] ?? 'فشل الإضافة ❌', Colors.red);
+      }
     } catch (e) {
       _showSnackBar('فشل الإضافة ❌', Colors.red);
     }
   }
 
   Future<void> _toggleTodo(String id, bool current) async {
-    await _firestore.collection('todos').doc(id).update({'completed': !current});
+    setState(() {
+      final idx = _todos.indexWhere((t) => t['_id'] == id || t['id'] == id);
+      if (idx != -1) {
+        _todos[idx]['completed'] = !current;
+      }
+    });
+
+    try {
+      final res = await ApiService().updateTodo(id, completed: !current);
+      if (res['success'] != true) {
+        _fetchTodos();
+      }
+    } catch (e) {
+      _fetchTodos();
+    }
   }
 
   Future<void> _deleteTodo(String id) async {
-    await _firestore.collection('todos').doc(id).delete();
+    setState(() {
+      _todos.removeWhere((t) => t['_id'] == id || t['id'] == id);
+    });
+    try {
+      await ApiService().deleteTodo(id);
+    } catch (e) {
+      _fetchTodos();
+    }
   }
 
   Future<void> _editTodo(String id, String oldTitle) async {
@@ -367,9 +381,17 @@ class _TodoScreenState extends State<TodoScreen> with TickerProviderStateMixin {
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
           ElevatedButton(
-            onPressed: () {
-              _firestore.collection('todos').doc(id).update({'title': controller.text.trim()});
+            onPressed: () async {
+              final newTitle = controller.text.trim();
               Navigator.pop(context);
+              if (newTitle.isNotEmpty) {
+                final res = await ApiService().updateTodo(id, title: newTitle);
+                if (res['success'] == true) {
+                  _fetchTodos();
+                } else {
+                  _showSnackBar(res['error'] ?? 'فشل التعديل', Colors.red);
+                }
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
             child: const Text('حفظ التعديل', style: TextStyle(color: Colors.white)),

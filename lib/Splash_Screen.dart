@@ -64,9 +64,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+    String userType = prefs.getString('userType') ?? 'customer';
     
     if (isLoggedIn) {
-      Navigator.pushReplacementNamed(context, '/home');
+      if (userType == 'admin') {
+        Navigator.pushReplacementNamed(context, '/admin');
+      } else if (userType == 'craftsman') {
+        Navigator.pushReplacementNamed(context, '/craftsman_home');
+      } else {
+        Navigator.pushReplacementNamed(context, '/home');
+      }
     } else {
       Navigator.pushReplacementNamed(context, '/auth');
     }

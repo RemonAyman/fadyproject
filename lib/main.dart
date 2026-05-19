@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'craftsmen_homescreen.dart';
-import 'firebase_options.dart';
 
 // Import all screens
 import 'Splash_Screen.dart';
 import 'Onboarding_Screen.dart';
 import 'auth_screen.dart';
 import 'Login_Screen.dart';
+import 'AdminDashboard_Screen.dart'; // ✅ Import Admin Dashboard
 
 import 'UserRegistration_Screen.dart';
 import 'CraftsmanRegistration_Screen.dart';
@@ -23,6 +22,7 @@ import 'Profile_Screen.dart';
 import 'Todo_Screen.dart';
 import 'CraftsmanRequests_Screen.dart'; // ✅ Import
 import 'CraftsmanBookings_Screen.dart'; // ✅ Import
+import 'UserBookings_Screen.dart';
 
 import 'package:intl/date_symbol_data_local.dart';
 
@@ -31,10 +31,7 @@ void main() async {
   
   try {
     await initializeDateFormatting('ar', null); // ✅ تهيئة تنسيق التواريخ للعربية
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    print('✅ Firebase initialized successfully');
+    print('🚀 REST API Integration Active');
   } catch (e) {
     print('❌ Initialization error: $e');
   }
@@ -65,6 +62,7 @@ class MyApp extends StatelessWidget {
         '/onboarding': (context) => const OnboardingScreen(),
         '/auth': (context) => const AuthScreen(),
         '/login': (context) => const LoginScreen(),
+        '/admin': (context) => const AdminDashboardScreen(), // ✅ Register Admin Dashboard Route
 
         '/user_registration': (context) => const UserRegistrationScreen(),
         '/craftsman_registration': (context) => const CraftsmanRegistrationScreen(),
@@ -92,7 +90,7 @@ class MyApp extends StatelessWidget {
         '/voice_search': (context) => const PlaceholderScreen(title: 'البحث الصوتي'),
         '/discounts': (context) => const PlaceholderScreen(title: 'العروض والخصومات'),
         '/featured_craftsmen': (context) => const PlaceholderScreen(title: 'الحرفيون المميزون'),
-        '/my_bookings': (context) => const PlaceholderScreen(title: 'حجوزاتي'),
+        '/my_bookings': (context) => const UserBookingsScreen(),
         '/messages': (context) => const PlaceholderScreen(title: 'الرسائل'),
         '/order_history': (context) => const PlaceholderScreen(title: 'سجل الطلبات'),
         '/favorites': (context) => const PlaceholderScreen(title: 'المفضلة'),

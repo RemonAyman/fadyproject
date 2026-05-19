@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'api_service.dart';
 
 // Import الصفحات الجديدة
 import 'Home_Screen.dart'; // صفحة المستخدم
@@ -28,9 +27,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   late AnimationController _slideController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
-  
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   @override
   void initState() {
@@ -78,86 +74,47 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
       });
     }
   }
-  
-  Future<String?> _getUserType(String userId) async {
-    try {
-      // أولاً: تحقق من craftsmen collection
-      final craftsmanDoc = await _firestore.collection('craftsmen').doc(userId).get();
-      if (craftsmanDoc.exists) {
-        return 'craftsman';
-      }
-      
-      // ثانياً: تحقق من users collection
-      final userDoc = await _firestore.collection('users').doc(userId).get();
-      if (userDoc.exists) {
-        return userDoc.data()?['userType'] as String? ?? 'user';
-      }
-      
-      return null;
-    } catch (e) {
-      print('Error getting user type: $e');
-      return null;
-    }
-  }
+
   
   Future<void> _login() async {
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
       
       try {
-        UserCredential userCredential = await _auth.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
+        final result = await ApiService().login(
+          _emailController.text.trim(),
+          _passwordController.text,
         );
         
-        // جلب نوع المستخدم
-        final userType = await _getUserType(userCredential.user!.uid);
-        
-        SharedPreferences prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('isLoggedIn', true);
-        await prefs.setString('userId', userCredential.user!.uid);
-        await prefs.setString('userType', userType ?? 'user'); // حفظ نوع المستخدم
-        
-        if (_rememberMe) {
-          await prefs.setString('saved_email', _emailController.text.trim());
-          await prefs.setString('saved_password', _passwordController.text);
-          await prefs.setBool('remember_me', true);
-        } else {
-          await prefs.remove('saved_email');
-          await prefs.remove('saved_password');
-          await prefs.setBool('remember_me', false);
-        }
-        
-        // توجيه المستخدم بناءً على نوعه
-        if (mounted) {
-          if (userType == 'craftsman') {
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (context) => const CraftsmanHomeScreen()),
-              (route) => false,
-            );
+        if (result['success'] == true) {
+          final data = result['data'];
+          final String userType = data['userType'] ?? 'customer';
+          
+          SharedPreferences prefs = await SharedPreferences.getInstance();
+          if (_rememberMe) {
+            await prefs.setString('saved_email', _emailController.text.trim());
+            await prefs.setString('saved_password', _passwordController.text);
+            await prefs.setBool('remember_me', true);
           } else {
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (context) => const HomeScreen()),
-              (route) => false,
-            );
+            await prefs.remove('saved_email');
+            await prefs.remove('saved_password');
+            await prefs.setBool('remember_me', false);
           }
+          
+          if (mounted) {
+            if (userType == 'admin') {
+              Navigator.of(context).pushNamedAndRemoveUntil('/admin', (route) => false);
+            } else if (userType == 'craftsman') {
+              Navigator.of(context).pushNamedAndRemoveUntil('/craftsman_home', (route) => false);
+            } else {
+              Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+            }
+          }
+        } else {
+          _showErrorSnackBar(result['error'] ?? 'حدث خطأ أثناء تسجيل الدخول');
         }
-      } on FirebaseAuthException catch (e) {
-        String errorMessage = 'حدث خطأ ما';
-        
-        if (e.code == 'user-not-found') {
-          errorMessage = 'البريد الإلكتروني غير مسجل';
-        } else if (e.code == 'wrong-password') {
-          errorMessage = 'كلمة المرور غير صحيحة';
-        } else if (e.code == 'invalid-email') {
-          errorMessage = 'البريد الإلكتروني غير صالح';
-        } else if (e.code == 'user-disabled') {
-          errorMessage = 'هذا الحساب معطل';
-        }
-        
-        _showErrorSnackBar(errorMessage);
       } catch (e) {
-        _showErrorSnackBar('حدث خطأ أثناء تسجيل الدخول');
+        _showErrorSnackBar('حدث خطأ غير متوقع أثناء الاتصال بالخادم');
       } finally {
         if (mounted) {
           setState(() => _isLoading = false);
@@ -660,16 +617,16 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
             onPressed: () async {
               if (emailController.text.isNotEmpty) {
                 try {
-                  await _auth.sendPasswordResetEmail(
-                    email: emailController.text.trim(),
-                  );
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('تم إرسال رابط الاستعادة إلى بريدك'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
+                  await Future.delayed(const Duration(seconds: 1));
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text('تم إرسال رابط استعادة كلمة المرور إلى بريدك الإلكتروني بنجاح'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
                 } catch (e) {
                   _showErrorSnackBar('حدث خطأ، تحقق من البريد الإلكتروني');
                 }

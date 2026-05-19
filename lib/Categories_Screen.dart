@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui';
+import 'api_service.dart';
 
 class CategoriesScreen extends StatefulWidget {
   const CategoriesScreen({Key? key}) : super(key: key);
@@ -22,6 +22,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   final Color warningColor = const Color(0xFFFFA502);
   final Color backgroundColor = const Color(0xFFF8F9FA);
   final Color darkColor = const Color(0xFF2C3E50);
+
+  List<dynamic> _allCraftsmen = [];
+  List<String> _favoriteCategories = [];
+  bool _isLoading = true;
 
   // قائمة الفئات الموسعة مع بيانات إضافية
   final List<Map<String, dynamic>> _allCategories = [
@@ -78,7 +82,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
       'name': 'نقاش',
       'icon': Icons.architecture,
       'color': const Color(0xFFE74C3C),
-      'description': 'أعمال المحارة، تشطيبات الواجهات، وعزل الرطوبة والحرارة.',
+      'description': 'أعمال المحارة، تشطب تشطيبات الواجهات، وعزل الرطوبة والحرارة.',
       'tip': 'نصيحة: عالج الرطوبة أولاً قبل البدء بأي أعمال نقاشة.'
     },
     {
@@ -115,6 +119,23 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+    try {
+      final list = await ApiService().getAllCraftsmen();
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _allCraftsmen = list;
+        _favoriteCategories = prefs.getStringList('favorite_categories') ?? [];
+      });
+    } catch (e) {
+      debugPrint('Error loading categories data: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -136,13 +157,15 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
               children: [
                 _buildHeaderContent(),
                 Expanded(
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildAllCategoriesGrid(),
-                      _buildFavoritesListView(),
-                    ],
-                  ),
+                  child: _isLoading
+                      ? Center(child: CircularProgressIndicator(color: primaryColor))
+                      : TabBarView(
+                          controller: _tabController,
+                          children: [
+                            _buildAllCategoriesGrid(),
+                            _buildFavoritesListView(),
+                          ],
+                        ),
                 ),
               ],
             ),
@@ -239,51 +262,48 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
       return c['name'].contains(_searchQuery) || c['description'].contains(_searchQuery);
     }).toList();
 
-    return CustomScrollView(
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        _buildStatsSliver(),
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.8,
-            ),
-            delegate: SliverChildBuilderDelegate(
-              (ctx, i) => _buildCategoryCard(filteredCategories[i]),
-              childCount: filteredCategories.length,
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          _buildStatsSliver(),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.8,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (ctx, i) => _buildCategoryCard(filteredCategories[i]),
+                childCount: filteredCategories.length,
+              ),
             ),
           ),
-        ),
-        const SliverToBoxAdapter(child: SizedBox(height: 30)),
-      ],
+          const SliverToBoxAdapter(child: SizedBox(height: 30)),
+        ],
+      ),
     );
   }
 
   Widget _buildCategoryCard(Map<String, dynamic> cat) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('craftsmen')
-          .where('category', isEqualTo: cat['name'])
-          .where('isAvailable', isEqualTo: true).snapshots(),
-      builder: (context, snapshot) {
-        int activeCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
-        return InkWell(
-          onTap: () => Navigator.pushNamed(context, '/craftsman_list', arguments: cat['name']),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(25),
-              boxShadow: [BoxShadow(color: cat['color'].withOpacity(0.1), blurRadius: 15, offset: const Offset(0, 8))],
-            ),
-            child: Column(
-              children: [
-                _buildCardHeader(cat),
-                _buildCardBody(cat, activeCount),
-              ],
-            ),
-          ),
-        );
-      },
+    int activeCount = _allCraftsmen.where((c) => c['category'] == cat['name'] && (c['isAvailable'] == true)).length;
+
+    return InkWell(
+      onTap: () => Navigator.pushNamed(context, '/craftsman_list', arguments: cat['name']),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: [BoxShadow(color: cat['color'].withOpacity(0.1), blurRadius: 15, offset: const Offset(0, 8))],
+        ),
+        child: Column(
+          children: [
+            _buildCardHeader(cat),
+            _buildCardBody(cat, activeCount),
+          ],
+        ),
+      ),
     );
   }
 
@@ -311,7 +331,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
         children: [
           Text(cat['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           const SizedBox(height: 5),
-          Text('${count > 0 ? "متوفر حالياً: $count" : "جاري توفير فنيين"}',
+          Text(count > 0 ? "متوفر حالياً: $count" : "جاري توفير فنيين",
               style: TextStyle(color: count > 0 ? secondaryColor : Colors.grey, fontSize: 12, fontWeight: FontWeight.w600)),
         ],
       ),
@@ -319,21 +339,17 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   }
 
   Widget _buildFavoritesListView() {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('favorite_categories').where('userId', isEqualTo: userId).snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return _buildEmptyState();
-        
-        var favoriteNames = snapshot.data!.docs.map((doc) => doc['categoryName']).toList();
-        var favCats = _allCategories.where((c) => favoriteNames.contains(c['name'])).toList();
+    var favCats = _allCategories.where((c) => _favoriteCategories.contains(c['name'])).toList();
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(20),
-          itemCount: favCats.length,
-          itemBuilder: (context, i) => _buildWideCategoryCard(favCats[i]),
-        );
-      },
+    if (favCats.isEmpty) return _buildEmptyState();
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(20),
+        itemCount: favCats.length,
+        itemBuilder: (context, i) => _buildWideCategoryCard(favCats[i]),
+      ),
     );
   }
 
@@ -364,37 +380,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   // --- Logic Functions ---
 
   Future<void> _toggleFavorite(String categoryName) async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) return;
-
-    var query = await FirebaseFirestore.instance.collection('favorite_categories')
-        .where('userId', isEqualTo: userId).where('categoryName', isEqualTo: categoryName).get();
-
-    if (query.docs.isEmpty) {
-      await FirebaseFirestore.instance.collection('favorite_categories').add({
-        'userId': userId, 'categoryName': categoryName, 'createdAt': FieldValue.serverTimestamp(),
-      });
-      _showSnack('تمت إضافة $categoryName للمفضلة', secondaryColor);
-    } else {
-      await query.docs.first.reference.delete();
-      _showSnack('تمت الإزالة من المفضلة', accentColor);
-    }
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      if (_favoriteCategories.contains(categoryName)) {
+        _favoriteCategories.remove(categoryName);
+        _showSnack('تمت الإزالة من المفضلة', accentColor);
+      } else {
+        _favoriteCategories.add(categoryName);
+        _showSnack('تمت إضافة $categoryName للمفضلة', secondaryColor);
+      }
+    });
+    await prefs.setStringList('favorite_categories', _favoriteCategories);
   }
 
   // --- Utility Widgets ---
 
   Widget _buildFavoriteIcon(String name) {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('favorite_categories')
-          .where('userId', isEqualTo: userId).where('categoryName', isEqualTo: name).snapshots(),
-      builder: (context, snapshot) {
-        bool isFav = snapshot.hasData && snapshot.data!.docs.isNotEmpty;
-        return IconButton(
-          icon: Icon(isFav ? Icons.favorite : Icons.favorite_border, color: Colors.white),
-          onPressed: () => _toggleFavorite(name),
-        );
-      },
+    bool isFav = _favoriteCategories.contains(name);
+    return IconButton(
+      icon: Icon(isFav ? Icons.favorite : Icons.favorite_border, color: Colors.white),
+      onPressed: () => _toggleFavorite(name),
     );
   }
 
@@ -412,6 +417,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
   }
 
   Widget _buildStatsSliver() {
+    int activeCraftsmen = _allCraftsmen.where((c) => c['isAvailable'] == true).length;
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
@@ -419,7 +425,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with SingleTickerPr
           children: [
             _buildMiniStat('فئة مسجلة', _allCategories.length.toString(), primaryColor),
             const SizedBox(width: 10),
-            _buildMiniStat('فني متاح', '120+', secondaryColor),
+            _buildMiniStat('فني متاح', activeCraftsmen > 0 ? activeCraftsmen.toString() : '0', secondaryColor),
           ],
         ),
       ),

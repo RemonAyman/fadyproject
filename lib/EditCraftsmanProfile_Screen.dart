@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui';
+import 'api_service.dart';
 
 class EditCraftsmanProfileScreen extends StatefulWidget {
   const EditCraftsmanProfileScreen({Key? key}) : super(key: key);
@@ -12,8 +11,6 @@ class EditCraftsmanProfileScreen extends StatefulWidget {
 
 class _EditCraftsmanProfileScreenState extends State<EditCraftsmanProfileScreen> with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -27,12 +24,18 @@ class _EditCraftsmanProfileScreenState extends State<EditCraftsmanProfileScreen>
   final _priceController = TextEditingController();
   
   String? _selectedCategory;
+  String? _selectedCity;
   bool _isLoading = true;
   bool _isSaving = false;
   
   final List<String> _categories = [
     'كهربائي', 'سباك', 'نجار', 'دهان', 'حداد',
     'بناء', 'تكييف وتبريد', 'نقاش', 'سيراميك', 'ألومنيوم',
+  ];
+  
+  final List<String> _cities = [
+    'القاهرة', 'الجيزة', 'الإسكندرية', 'الشرقية', 'الدقهلية',
+    'البحيرة', 'الغربية', 'المنوفية', 'القليوبية', 'أخرى'
   ];
   
   List<String> _selectedServices = [];
@@ -61,19 +64,19 @@ class _EditCraftsmanProfileScreenState extends State<EditCraftsmanProfileScreen>
   
   Future<void> _loadCraftsmanData() async {
     try {
-      User? user = _auth.currentUser;
-      if (user != null) {
-        DocumentSnapshot doc = await _firestore.collection('craftsmen').doc(user.uid).get();
-        if (doc.exists) {
-          Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+      final userId = await ApiService().getUserId();
+      if (userId != null) {
+        final data = await ApiService().getCraftsmanDetails(userId);
+        if (data != null) {
           setState(() {
             _nameController.text = data['name'] ?? '';
             _phoneController.text = data['phone'] ?? '';
             _addressController.text = data['address'] ?? '';
             _experienceController.text = data['experience']?.toString() ?? '';
             _bioController.text = data['bio'] ?? '';
-            _priceController.text = data['hourlyRate']?.toString() ?? '';
+            _priceController.text = (data['price'] ?? data['hourlyRate'])?.toString() ?? '';
             _selectedCategory = data['category'];
+            _selectedCity = data['city'];
             _selectedServices = List<String>.from(data['services'] ?? []);
           });
         }
@@ -95,24 +98,29 @@ class _EditCraftsmanProfileScreenState extends State<EditCraftsmanProfileScreen>
       
       setState(() => _isSaving = true);
       try {
-        User? user = _auth.currentUser;
-        if (user != null) {
-          await _firestore.collection('craftsmen').doc(user.uid).set({
+        final userId = await ApiService().getUserId();
+        if (userId != null) {
+          final data = {
             'name': _nameController.text.trim(),
             'phone': _phoneController.text.trim(),
+            'city': _selectedCity,
             'address': _addressController.text.trim(),
             'experience': int.tryParse(_experienceController.text) ?? 0,
             'bio': _bioController.text.trim(),
-            'hourlyRate': double.tryParse(_priceController.text) ?? 0.0,
+            'price': double.tryParse(_priceController.text) ?? 0.0,
             'category': _selectedCategory,
             'services': _selectedServices,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+          };
           
-          _showSnackBar('تم تحديث ملفك الشخصي بنجاح ✨', Colors.green);
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) Navigator.pop(context);
-          });
+          final res = await ApiService().updateCraftsmanProfile(userId, data);
+          if (res['success'] == true) {
+            _showSnackBar('تم تحديث ملفك الشخصي بنجاح ✨', Colors.green);
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) Navigator.pop(context);
+            });
+          } else {
+            _showSnackBar(res['error'] ?? 'فشل تعديل البيانات', Colors.red);
+          }
         }
       } catch (e) {
         _showSnackBar('حدث خطأ أثناء الحفظ، يرجى المحاولة لاحقاً', Colors.red);
@@ -233,7 +241,9 @@ class _EditCraftsmanProfileScreenState extends State<EditCraftsmanProfileScreen>
                 const SizedBox(height: 15),
                 _buildTextField(_phoneController, 'رقم التواصل المباشر', Icons.phone_android_outlined, keyboardType: TextInputType.phone),
                 const SizedBox(height: 15),
-                _buildTextField(_addressController, 'المنطقة أو الحي', Icons.map_outlined),
+                _buildCityDropdown(),
+                const SizedBox(height: 15),
+                _buildTextField(_addressController, 'العنوان بالتفصيل', Icons.map_outlined),
                 
                 const SizedBox(height: 35),
                 _buildSectionHeader(Icons.work_history_outlined, 'الخبرة والأسعار'),
@@ -320,6 +330,27 @@ class _EditCraftsmanProfileScreenState extends State<EditCraftsmanProfileScreen>
       ),
     );
   }
+
+  Widget _buildCityDropdown() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFDFDFD),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: _selectedCity,
+          hint: const Text('اختر المحافظة', textAlign: TextAlign.right),
+          items: _cities.map((c) => DropdownMenuItem(value: c, child: Text(c, textAlign: TextAlign.right))).toList(),
+          onChanged: (v) => setState(() => _selectedCity = v),
+        ),
+      ),
+    );
+  }
+
 
   Widget _buildServicesWrap() {
     return Wrap(

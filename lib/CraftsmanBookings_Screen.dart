@@ -1,19 +1,55 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart' as intl;
+import 'api_service.dart';
 
-class CraftsmanBookingsScreen extends StatelessWidget {
+class CraftsmanBookingsScreen extends StatefulWidget {
   const CraftsmanBookingsScreen({Key? key}) : super(key: key);
 
+  @override
+  State<CraftsmanBookingsScreen> createState() => _CraftsmanBookingsScreenState();
+}
+
+class _CraftsmanBookingsScreenState extends State<CraftsmanBookingsScreen> {
   final Color primaryColor = const Color(0xFF6C63FF);
   final Color secondaryColor = const Color(0xFF2ECC71);
   final Color completeColor = const Color(0xFF4CAF50);
 
+  List<dynamic> _bookings = [];
+  bool _isLoading = true;
+  String? _userId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBookings();
+  }
+
+  Future<void> _loadBookings() async {
+    setState(() => _isLoading = true);
+    try {
+      final uid = await ApiService().getUserId();
+      if (uid != null) {
+        _userId = uid;
+        final list = await ApiService().getBookingsForCraftsman(uid);
+        setState(() {
+          _bookings = list.where((booking) => booking['status'] == 'confirmed').toList();
+          // Sort ascending (nearest first)
+          _bookings.sort((a, b) {
+            final aDate = DateTime.tryParse(a['appointmentDate'] ?? '') ?? DateTime.now();
+            final bDate = DateTime.tryParse(b['appointmentDate'] ?? '') ?? DateTime.now();
+            return aDate.compareTo(bDate);
+          });
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading bookings: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
@@ -21,62 +57,41 @@ class CraftsmanBookingsScreen extends StatelessWidget {
         backgroundColor: primaryColor,
         foregroundColor: Colors.white,
       ),
-      body: userId == null
-          ? const Center(child: Text('يجب تسجيل الدخول'))
-          : StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('bookings')
-                  .where('craftsmanId', isEqualTo: userId)
-                  .where('status', isEqualTo: 'confirmed') // يظهر فقط الحجوزات المؤكدة
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(child: CircularProgressIndicator(color: primaryColor));
-                }
-
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.calendar_today, size: 80, color: Colors.grey.shade300),
-                        const SizedBox(height: 16),
-                        Text(
-                          'لا توجد حجوزات مؤكدة حالياً',
-                          style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
-                        ),
-                      ],
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator(color: primaryColor))
+          : _userId == null
+              ? const Center(child: Text('يجب تسجيل الدخول'))
+              : _bookings.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.calendar_today, size: 80, color: Colors.grey.shade300),
+                          const SizedBox(height: 16),
+                          Text(
+                            'لا توجد حجوزات مؤكدة حالياً',
+                            style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _loadBookings,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _bookings.length,
+                        itemBuilder: (context, index) {
+                          final data = _bookings[index] as Map<String, dynamic>;
+                          final docId = data['_id'] ?? data['id'] ?? '';
+                          return _buildBookingCard(context, docId, data);
+                        },
+                      ),
                     ),
-                  );
-                }
-
-                // ✅ الفرز في التطبيق بدلاً من الفايربيس لتجنب مشكلة الـ Index
-                final docs = snapshot.data!.docs;
-                docs.sort((a, b) {
-                  final aDate = (a.data() as Map<String, dynamic>)['appointmentDate'] as Timestamp?;
-                  final bDate = (b.data() as Map<String, dynamic>)['appointmentDate'] as Timestamp?;
-                  if (aDate == null || bDate == null) return 0;
-                  return aDate.compareTo(bDate); // تصاعدي (الأقرب فالأبعد)
-                });
-
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final doc = docs[index];
-                    final data = doc.data() as Map<String, dynamic>;
-                    
-                    return _buildBookingCard(context, doc.id, data);
-                  },
-                );
-              },
-            ),
     );
   }
 
   Widget _buildBookingCard(BuildContext context, String docId, Map<String, dynamic> data) {
-    final dateToken = data['appointmentDate'] as Timestamp?;
-    final date = dateToken?.toDate();
+    final date = DateTime.tryParse(data['appointmentDate'] ?? '');
     final dateStr = date != null 
         ? intl.DateFormat('yyyy/MM/dd', 'ar').format(date) 
         : 'غير محدد';
@@ -152,21 +167,33 @@ class CraftsmanBookingsScreen extends StatelessWidget {
 
   Future<void> _completeJob(BuildContext context, String docId) async {
     try {
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(docId)
-          .update({'status': 'completed'}); // تغيير الحالة إلى مكتمل لجني الأرباح
-          
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('تم إتمام المهمة بنجاح، وإضافة المبلغ للأرباح!'),
-          backgroundColor: completeColor,
-        ),
-      );
+      final res = await ApiService().updateBookingStatus(docId, 'completed');
+      if (res['success'] == true) {
+        setState(() {
+          _bookings.removeWhere((booking) => (booking['_id'] ?? booking['id']) == docId);
+        });
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('تم إتمام المهمة بنجاح، وإضافة المبلغ للأرباح!'),
+              backgroundColor: completeColor,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(res['error'] ?? 'حدث خطأ أثناء تحديث الحالة')),
+          );
+        }
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('حدث خطأ أثناء تحديث الحالة')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('حدث خطأ أثناء تحديث الحالة')),
+        );
+      }
     }
   }
 }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'craftsmen_homescreen.dart';
+import 'api_service.dart';
 
 class CraftsmanRegistrationScreen extends StatefulWidget {
   const CraftsmanRegistrationScreen({Key? key}) : super(key: key);
@@ -55,46 +54,40 @@ class _CraftsmanRegistrationScreenState extends State<CraftsmanRegistrationScree
     setState(() => _isLoading = true);
 
     try {
-      // 1. إنشاء الحساب في Authentication
-      UserCredential userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
+      final double price = double.tryParse(_priceController.text.trim()) ?? 0.0;
+      final int exp = int.tryParse(_experienceController.text.trim()) ?? 0;
+
+      final result = await ApiService().registerCraftsman(
+        name: _nameController.text.trim(),
         email: _emailController.text.trim(),
+        phone: _phoneController.text.trim(),
+        category: _selectedCategory!,
+        price: price,
+        experience: exp,
         password: _passwordController.text.trim(),
       );
 
-      // 2. الرفع لـ Firestore (بدون استخدام await لضمان سرعة الانتقال)
-      FirebaseFirestore.instance
-          .collection('craftsmen')
-          .doc(userCredential.user!.uid)
-          .set({
-        'uid': userCredential.user!.uid,
-        'name': _nameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'category': _selectedCategory,
-        'price': _priceController.text.trim(),
-        'experience': _experienceController.text.trim(),
-        'isAvailable': true,
-        'userType': 'craftsman',
-        'rating': 5.0, // نبدأ بتقييم 5 افتراضي
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // 3. النقل الفوري لصفحة الهوم (مثل العميل بالظبط)
-      if (mounted) {
-        setState(() => _isLoading = false);
-        
-        // استخدام الانتقال المباشر بالكلاس لضمان الوصول
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const CraftsmanHomeScreen()),
-          (route) => false,
-        );
+      if (result['success'] == true) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('تم إنشاء حسابك بنجاح! 🎉'), backgroundColor: Colors.green),
+          );
+          Navigator.of(context).pushNamedAndRemoveUntil('/craftsman_home', (route) => false);
+        }
+      } else {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(result['error'] ?? 'فشل التسجيل'), backgroundColor: Colors.red),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('حدث خطأ: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('حدث خطأ أثناء الاتصال بالخادم: $e'), backgroundColor: Colors.red),
         );
       }
     }

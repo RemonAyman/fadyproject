@@ -1,7 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'api_service.dart';
 
 // =============================================================================
 // MODELS - نفس النموذج المستخدم في شاشة المستخدم
@@ -79,97 +79,60 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
   }
 
   Future<void> _loadCraftsmanData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      try {
-        final craftsmanDoc = await FirebaseFirestore.instance
-            .collection('craftsmen')
-            .doc(user.uid)
-            .get();
-        
-        if (craftsmanDoc.exists) {
+    try {
+      final userId = await ApiService().getUserId();
+      if (userId != null) {
+        final data = await ApiService().getCraftsmanDetails(userId);
+        if (data != null) {
           setState(() {
-            _currentCraftsman = Craftsman.fromMap(
-              craftsmanDoc.data() as Map<String, dynamic>,
-              craftsmanDoc.id
-            );
+            _currentCraftsman = Craftsman.fromMap(data, userId);
             _isLoading = false;
           });
         } else {
-          // إذا لم يكن مسجلاً كحرفي، نحمله من users
-          final userDoc = await FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .get();
-              
-          if (userDoc.exists) {
-            setState(() {
-              _currentCraftsman = Craftsman(
-                uid: user.uid,
-                name: userDoc.data()?['name'] ?? 'حرفي',
-                category: userDoc.data()?['category'] ?? 'عام',
-                price: userDoc.data()?['price']?.toString() ?? '100',
-                experience: userDoc.data()?['experience']?.toString() ?? '0',
-                email: userDoc.data()?['email'] ?? '',
-                phone: userDoc.data()?['phone'] ?? '',
-              );
-              _isLoading = false;
-            });
-          } else {
-            setState(() => _isLoading = false);
-          }
+          setState(() => _isLoading = false);
         }
-      } catch (e) {
-        print('Error loading craftsman: $e');
+      } else {
         setState(() => _isLoading = false);
       }
+    } catch (e) {
+      print('Error loading craftsman: $e');
+      setState(() => _isLoading = false);
     }
   }
 
   Future<void> _loadStatistics() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
     try {
-      // جلب الطلبات المعلقة (new bookings)
-      final pendingRequests = await FirebaseFirestore.instance
-          .collection('bookings') // ✅ تم التعديل من requests إلى bookings
-          .where('craftsmanId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'new') // ✅ الحالة new هي الطلبات الجديدة
-          .get();
-      
-      // جلب الحجوزات القادمة (Confirmed)
-      // ✅ إزالة شرط التاريخ من الاستعلام لتجنب مشكلة Index
-      final confirmedBookingsQuery = await FirebaseFirestore.instance
-          .collection('bookings')
-          .where('craftsmanId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'confirmed')
-          .get();
+      final userId = await ApiService().getUserId();
+      if (userId == null) return;
 
-      // ✅ تصفية الحجوزات القادمة فقط في التطبيق
-      final now = DateTime.now();
-      final upcomingBookingsCount = confirmedBookingsQuery.docs.where((doc) {
-        final data = doc.data();
-        if (data['appointmentDate'] == null) return false;
-        final date = (data['appointmentDate'] as Timestamp).toDate();
-        return date.isAfter(now) || date.isAtSameMomentAs(now);
-      }).length;
+      final bookings = await ApiService().getBookingsForCraftsman(userId);
       
-      // جلب الأرباح (من الحجوزات المكتملة)
-      final earningsQuery = await FirebaseFirestore.instance
-          .collection('bookings')
-          .where('craftsmanId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'completed')
-          .get();
-      
+      int pending = 0;
+      int upcoming = 0;
       double earnings = 0.0;
-      for (var doc in earningsQuery.docs) {
-        earnings += (doc.data()['price'] as num?)?.toDouble() ?? 0.0;
+      final now = DateTime.now();
+      
+      for (var booking in bookings) {
+        final status = booking['status'] ?? 'new';
+        if (status == 'new') {
+          pending++;
+        } else if (status == 'confirmed') {
+          if (booking['appointmentDate'] != null) {
+            final date = DateTime.tryParse(booking['appointmentDate']) ?? now;
+            if (date.isAfter(now) || date.isAtSameMomentAs(now)) {
+              upcoming++;
+            }
+          } else {
+            upcoming++;
+          }
+        } else if (status == 'completed') {
+          earnings += (booking['expectedPrice'] ?? booking['price'] ?? 0.0) as num;
+        }
       }
 
       setState(() {
-        _pendingRequests = pendingRequests.docs.length;
-        _upcomingBookings = upcomingBookingsCount; // ✅ استخدام العدد المحسوب
+        _pendingRequests = pending;
+        _upcomingBookings = upcoming;
         _totalEarnings = earnings;
       });
     } catch (e) {
@@ -178,33 +141,33 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
   }
 
   Future<void> _toggleAvailability() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _currentCraftsman == null) return;
-
     try {
-      await FirebaseFirestore.instance
-          .collection('craftsmen')
-          .doc(user.uid)
-          .update({
-            'isAvailable': !_currentCraftsman!.isAvailable,
-          });
-      
-      setState(() {
-        _currentCraftsman = _currentCraftsman!.copyWith(
-          isAvailable: !_currentCraftsman!.isAvailable,
-        );
+      final userId = await ApiService().getUserId();
+      if (userId == null || _currentCraftsman == null) return;
+
+      final newAvailable = !_currentCraftsman!.isAvailable;
+      final res = await ApiService().updateCraftsmanProfile(userId, {
+        'isAvailable': newAvailable,
       });
       
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _currentCraftsman!.isAvailable 
-                ? 'أنت الآن متاح للعمل' 
-                : 'أنت الآن غير متاح',
+      if (res['success'] == true) {
+        setState(() {
+          _currentCraftsman = _currentCraftsman!.copyWith(
+            isAvailable: newAvailable,
+          );
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              newAvailable 
+                  ? 'أنت الآن متاح للعمل' 
+                  : 'أنت الآن غير متاح',
+            ),
+            backgroundColor: newAvailable ? successColor : Colors.grey,
           ),
-          backgroundColor: _currentCraftsman!.isAvailable ? successColor : Colors.grey,
-        ),
-      );
+        );
+      }
     } catch (e) {
       print('Error updating availability: $e');
     }
@@ -596,7 +559,7 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
         'title': 'جدول الحجوزات',
         'icon': Icons.calendar_month,
         'color': primaryColor,
-        'route': '/craftsman_schedule',
+        'route': '/craftsman_bookings',
       },
       {
         'title': 'المحادثات',
@@ -669,35 +632,28 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
   // =============================================================================
   
   Widget _buildUpcomingBookings() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('bookings')
-          .where('craftsmanId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
-          .where('status', isEqualTo: 'confirmed')
-          // .where('appointmentDate', isGreaterThanOrEqualTo: Timestamp.now()) // ❌ إزالة لعدم وجود Index
-          // .orderBy('appointmentDate') // ❌ إزالة الترتيب أيضاً
-          .snapshots(),
+    return FutureBuilder<List<dynamic>>(
+      future: ApiService().getUserId().then((uid) => uid != null ? ApiService().getBookingsForCraftsman(uid) : Future.value([])),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // ✅ الفرز والتصفية في التطبيق
-        var bookings = snapshot.data!.docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          if (data['appointmentDate'] == null) return false;
-          final date = (data['appointmentDate'] as Timestamp).toDate();
-          return date.isAfter(DateTime.now().subtract(const Duration(days: 1))); // إظهار حجوزات اليوم والمستقبل
+        var bookings = snapshot.data ?? [];
+        bookings = bookings.where((booking) {
+          final status = booking['status'] ?? '';
+          if (status != 'confirmed') return false;
+          if (booking['appointmentDate'] == null) return true;
+          final date = DateTime.tryParse(booking['appointmentDate'] ?? '') ?? DateTime.now();
+          return date.isAfter(DateTime.now().subtract(const Duration(days: 1)));
         }).toList();
 
-        // ترتيب حسب التاريخ
         bookings.sort((a, b) {
-           final dateA = ((a.data() as Map<String, dynamic>)['appointmentDate'] as Timestamp).toDate();
-           final dateB = ((b.data() as Map<String, dynamic>)['appointmentDate'] as Timestamp).toDate();
+           final dateA = DateTime.tryParse(a['appointmentDate'] ?? '') ?? DateTime.now();
+           final dateB = DateTime.tryParse(b['appointmentDate'] ?? '') ?? DateTime.now();
            return dateA.compareTo(dateB);
         });
 
-        // أخذ أول 3 فقط
         if (bookings.length > 3) {
           bookings = bookings.sublist(0, 3);
         }
@@ -735,8 +691,8 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
           physics: const NeverScrollableScrollPhysics(),
           itemCount: bookings.length,
           itemBuilder: (context, index) {
-            final booking = bookings[index].data() as Map<String, dynamic>;
-            final date = (booking['appointmentDate'] as Timestamp).toDate(); // ✅ تصحيح الاسم
+            final booking = bookings[index] as Map<String, dynamic>;
+            final date = DateTime.tryParse(booking['appointmentDate'] ?? '') ?? DateTime.now();
             
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
@@ -767,7 +723,7 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          booking['serviceType'] ?? 'خدمة', // ✅ تصحيح الاسم
+                          booking['serviceType'] ?? 'خدمة',
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
@@ -775,14 +731,14 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
                         ),
                         const SizedBox(height: 5),
                         Text(
-                          '${_formatDate(date)} - ${booking['appointmentTime'] ?? ''}', // ✅ تصحيح الاسم
+                          '${_formatDate(date)} - ${booking['appointmentTime'] ?? ''}',
                           style: TextStyle(color: Colors.grey[600]),
                         ),
                       ],
                     ),
                   ),
                   Text(
-                    '${booking['expectedPrice']?.toString() ?? '0'} ج.م', // ✅ تصحيح الاسم
+                    '${(booking['expectedPrice'] ?? booking['price'] ?? 0).toString()} ج.م',
                     style: TextStyle(
                       color: successColor,
                       fontWeight: FontWeight.bold,
@@ -848,7 +804,7 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
           _drawerTile(Icons.person, 'الملف الشخصي', () => Navigator.pushNamed(context, '/craftsman_profile')),
           _drawerTile(Icons.request_page, 'طلبات العمل', () => Navigator.pushNamed(context, '/craftsman_requests')),
           _drawerTile(Icons.calendar_month, 'الحجوزات', () => Navigator.pushNamed(context, '/craftsman_bookings')),
-          _drawerTile(Icons.schedule, 'جدول المواعيد', () => Navigator.pushNamed(context, '/craftsman_schedule')),
+          _drawerTile(Icons.schedule, 'جدول المواعيد', () => Navigator.pushNamed(context, '/craftsman_bookings')),
           _drawerTile(Icons.chat, 'المحادثات', () => Navigator.pushNamed(context, '/craftsman_chats')),
           _drawerTile(Icons.star, 'التقييمات', () => Navigator.pushNamed(context, '/craftsman_reviews')),
           _drawerTile(Icons.attach_money, 'الأرباح', () => Navigator.pushNamed(context, '/craftsman_earnings')),
@@ -894,7 +850,7 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
               Navigator.pushNamed(context, '/craftsman_requests');
               break;
             case 2:
-              Navigator.pushNamed(context, '/craftsman_schedule');
+              Navigator.pushNamed(context, '/craftsman_bookings');
               break;
             case 3:
               Navigator.pushNamed(context, '/craftsman_chats');
@@ -937,7 +893,13 @@ class _CraftsmanHomeScreenState extends State<CraftsmanHomeScreen> {
     );
 
     if (confirm == true) {
-      await FirebaseAuth.instance.signOut();
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', false);
+      await prefs.remove('userId');
+      await prefs.remove('userType');
+      await prefs.remove('token');
+      await prefs.remove('name');
+      
       if (mounted) {
         Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       }

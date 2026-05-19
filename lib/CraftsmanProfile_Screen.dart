@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui';
+import 'api_service.dart';
 
 class CraftsmanProfileScreen extends StatefulWidget {
   const CraftsmanProfileScreen({Key? key}) : super(key: key);
@@ -11,8 +10,11 @@ class CraftsmanProfileScreen extends StatefulWidget {
 }
 
 class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
-  final currentUser = FirebaseAuth.instance.currentUser;
   bool _isAvailable = true;
+  bool _isLoading = true;
+  String? _userId;
+  Map<String, dynamic>? _craftsmanData;
+  int _completedJobsCount = 0;
 
   // لوحة ألوان فخمة وعصرية
   final Color primaryColor = const Color(0xFF6C63FF);
@@ -21,6 +23,36 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
   final Color warningColor = const Color(0xFFFFA502);
   final Color backgroundColor = const Color(0xFFF8F9FA);
   final Color darkColor = const Color(0xFF2C3E50);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfileData();
+  }
+
+  Future<void> _loadProfileData() async {
+    setState(() => _isLoading = true);
+    try {
+      final uid = await ApiService().getUserId();
+      if (uid != null) {
+        _userId = uid;
+        final data = await ApiService().getCraftsmanDetails(uid);
+        final bookings = await ApiService().getBookingsForCraftsman(uid);
+        
+        setState(() {
+          _craftsmanData = data;
+          if (data != null) {
+            _isAvailable = data['isAvailable'] ?? true;
+          }
+          _completedJobsCount = bookings.where((b) => b['status'] == 'completed').length;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading craftsman profile: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
 
   // دالة تسجيل الخروج الاحترافية مع التأكيد
   Future<void> _handleLogout(BuildContext context) async {
@@ -48,7 +80,7 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
     );
 
     if (confirm == true) {
-      await FirebaseAuth.instance.signOut();
+      await ApiService().logout();
       if (mounted) {
         Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       }
@@ -57,51 +89,47 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (currentUser == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_userId == null || _craftsmanData == null) return _buildNotFoundView();
+
+    var data = _craftsmanData!;
 
     return Scaffold(
       backgroundColor: backgroundColor,
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance.collection('craftsmen').doc(currentUser!.uid).snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (!snapshot.hasData || !snapshot.data!.exists) return _buildNotFoundView();
+      body: RefreshIndicator(
+        onRefresh: _loadProfileData,
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            // 1. الجزء العلوي المطور (Modern Sliver Header)
+            _buildHeader(data),
 
-          var data = snapshot.data!.data() as Map<String, dynamic>;
-          _isAvailable = data['isAvailable'] ?? true;
+            // 2. بطاقة الحالة التفاعلية
+            _buildAvailabilityCard(),
 
-          return CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              // 1. الجزء العلوي المطور (Modern Sliver Header)
-              _buildHeader(data),
+            // 3. لوحة الإحصائيات (Stats Dashboard)
+            _buildStatsGrid(data),
 
-              // 2. بطاقة الحالة التفاعلية
-              _buildAvailabilityCard(),
+            // 4. القوائم الإدارية (Management Menu)
+            _buildSectionTitle('إدارة أعمالك'),
+            _buildManagementMenu(context),
 
-              // 3. لوحة الإحصائيات (Stats Dashboard)
-              _buildStatsGrid(data),
+            // 5. معلومات التواصل
+            _buildSectionTitle('بيانات الحساب العامة'),
+            _buildAccountInfo(data),
 
-              // 4. القوائم الإدارية (Management Menu)
-              _buildSectionTitle('إدارة أعمالك'),
-              _buildManagementMenu(context),
-
-              // 5. معلومات التواصل
-              _buildSectionTitle('بيانات الحساب العامة'),
-              _buildAccountInfo(data),
-
-              // 6. زر تسجيل الخروج العائم
-              _buildLogoutButton(context),
-              
-              const SliverToBoxAdapter(child: SizedBox(height: 50)),
-            ],
-          );
-        },
+            // 6. زر تسجيل الخروج العائم
+            _buildLogoutButton(context),
+            
+            const SliverToBoxAdapter(child: SizedBox(height: 50)),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildHeader(Map<String, dynamic> data) {
+    final photoUrl = data['photoUrl'] ?? data['imageUrl'];
     return SliverAppBar(
       expandedHeight: 280,
       pinned: true,
@@ -127,7 +155,7 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const SizedBox(height: 40),
-                _buildProfileAvatar(data['imageUrl']),
+                _buildProfileAvatar(photoUrl),
                 const SizedBox(height: 15),
                 Text(data['name'] ?? 'حرفي مميز', style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 5),
@@ -140,7 +168,10 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
       actions: [
         IconButton(
           icon: const Icon(Icons.edit_rounded, color: Colors.white),
-          onPressed: () => Navigator.pushNamed(context, '/edit_craftsman_profile'),
+          onPressed: () async {
+            await Navigator.pushNamed(context, '/edit_craftsman_profile');
+            _loadProfileData(); // Reload profile when returning from editing
+          },
         ),
         IconButton(
           icon: const Icon(Icons.settings_outlined, color: Colors.white),
@@ -157,8 +188,8 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
       child: CircleAvatar(
         radius: 55,
         backgroundColor: Colors.grey.shade200,
-        backgroundImage: url != null ? NetworkImage(url) : null,
-        child: url == null ? Icon(Icons.person, size: 60, color: primaryColor) : null,
+        backgroundImage: url != null && url.isNotEmpty ? NetworkImage(url) : null,
+        child: url == null || url.isEmpty ? Icon(Icons.person, size: 60, color: primaryColor) : null,
       ),
     );
   }
@@ -191,7 +222,16 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
               value: _isAvailable,
               activeColor: secondaryColor,
               onChanged: (val) async {
-                await FirebaseFirestore.instance.collection('craftsmen').doc(currentUser!.uid).update({'isAvailable': val});
+                if (_userId != null) {
+                  setState(() => _isAvailable = val);
+                  final res = await ApiService().updateCraftsmanProfile(_userId!, {'isAvailable': val});
+                  if (res['success'] != true && mounted) {
+                    setState(() => _isAvailable = !val);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('فشل تعديل حالة الجاهزية')),
+                    );
+                  }
+                }
               },
             ),
           ],
@@ -201,14 +241,15 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
   }
 
   Widget _buildStatsGrid(Map<String, dynamic> data) {
+    final rating = data['rating'] != null ? double.tryParse(data['rating'].toString()) ?? 5.0 : 5.0;
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: Row(
           children: [
-            _buildStatCard(Icons.star_rounded, data['rating']?.toStringAsFixed(1) ?? '5.0', 'التقييم', warningColor),
+            _buildStatCard(Icons.star_rounded, rating.toStringAsFixed(1), 'التقييم', warningColor),
             const SizedBox(width: 12),
-            _buildStatCard(Icons.verified_user_rounded, '${data['completedJobs'] ?? 0}', 'المهام', secondaryColor),
+            _buildStatCard(Icons.verified_user_rounded, '$_completedJobsCount', 'المهام', secondaryColor),
             const SizedBox(width: 12),
             _buildStatCard(Icons.payments_rounded, '${data['price'] ?? 0}', 'السعر/س', primaryColor),
           ],
@@ -242,7 +283,7 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
             const Divider(height: 30),
             _buildDetailRow(Icons.phone_iphone_rounded, 'رقم التواصل', data['phone'] ?? 'غير متوفر'),
             const Divider(height: 30),
-            _buildDetailRow(Icons.location_on_outlined, 'منطقة العمل', data['address'] ?? 'غير محددة'),
+            _buildDetailRow(Icons.location_on_outlined, 'منطقة العمل', data['address'] ?? data['city'] ?? 'غير محددة'),
             const Divider(height: 30),
             _buildDetailRow(Icons.history_edu_rounded, 'سنوات الخبرة', '${data['experience'] ?? 0} سنوات'),
           ],
@@ -341,6 +382,26 @@ class _CraftsmanProfileScreenState extends State<CraftsmanProfileScreen> {
   }
 
   Widget _buildNotFoundView() {
-    return Scaffold(body: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.person_off_rounded, size: 80, color: Colors.grey), const SizedBox(height: 16), const Text('لم نتمكن من العثور على ملفك الشخصي'), TextButton(onPressed: () => FirebaseAuth.instance.signOut(), child: const Text('تسجيل الخروج'))])));
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.person_off_rounded, size: 80, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text('لم نتمكن من العثور على ملفك الشخصي'),
+            TextButton(
+              onPressed: () async {
+                await ApiService().logout();
+                if (mounted) {
+                  Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+                }
+              },
+              child: const Text('تسجيل الخروج'),
+            )
+          ],
+        ),
+      ),
+    );
   }
 }

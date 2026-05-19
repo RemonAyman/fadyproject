@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'Home_Screen.dart'; // تأكد أن اسم الملف صحيح
+import 'Home_Screen.dart';
+import 'api_service.dart';
 
 class UserRegistrationScreen extends StatefulWidget {
   const UserRegistrationScreen({Key? key}) : super(key: key);
@@ -46,7 +45,6 @@ class _UserRegistrationScreenState extends State<UserRegistrationScreen> {
     super.dispose();
   }
 
-  // الدالة المنقذة اللي هتخلي البرنامج ميعلقش
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_agreeToTerms) {
@@ -61,53 +59,28 @@ class _UserRegistrationScreenState extends State<UserRegistrationScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. إنشاء الحساب في Authentication (ده اللي يهمنا عشان الـ AuthWrapper يحس بيك)
-      UserCredential userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
+      final result = await ApiService().registerUser(
+        name: _nameController.text.trim(),
         email: _emailController.text.trim(),
+        phone: _phoneController.text.trim(),
+        city: _selectedCity!,
+        address: _addressController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
-      // 2. رفع البيانات لـ Firestore (بدون await عشان الـ Chrome ميهنجش)
-      // السطر ده هيتنفذ في الخلفية والبرنامج هيكمل عادي
-      FirebaseFirestore.instance
-          .collection('users')
-          .doc(userCredential.user!.uid)
-          .set({
-        'uid': userCredential.user!.uid,
-        'name': _nameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'city': _selectedCity,
-        'address': _addressController.text.trim(),
-        'userType': 'customer',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // 3. النقل الفوري والإجباري لصفحة الـ Home
-      if (mounted) {
-        setState(() => _isLoading = false);
-        
-        _showSnackBar('تم إنشاء حسابك بنجاح! 🎉', Colors.green);
-
-        // استخدام Navigator المباشر لكسر حلقة الـ Loading للأبد
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
-          (route) => false,
-        );
+      if (result['success'] == true) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          _showSnackBar('تم إنشاء حسابك بنجاح! 🎉', Colors.green);
+          Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+        _showSnackBar(result['error'] ?? 'حدث خطأ أثناء التسجيل', Colors.red);
       }
-    } on FirebaseAuthException catch (e) {
-      if (mounted) setState(() => _isLoading = false);
-      String message = 'حدث خطأ أثناء التسجيل';
-      if (e.code == 'email-already-in-use') {
-        message = 'البريد الإلكتروني مستخدم بالفعل';
-      } else if (e.code == 'weak-password') {
-        message = 'كلمة المرور ضعيفة جداً';
-      }
-      _showSnackBar(message, Colors.red);
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
-      _showSnackBar('خطأ غير متوقع: $e', Colors.red);
+      _showSnackBar('فشل الاتصال بالخادم، يرجى المحاولة لاحقاً', Colors.red);
     }
   }
 

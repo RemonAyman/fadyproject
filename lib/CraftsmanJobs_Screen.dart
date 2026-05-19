@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-
+import 'package:shared_preferences/shared_preferences.dart';
+import 'api_service.dart';
 
 class CraftsmanJobsScreen extends StatefulWidget {
   const CraftsmanJobsScreen({Key? key}) : super(key: key);
@@ -18,13 +17,17 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
   late Animation<double> _fabAnimation;
   late Animation<double> _headerAnimation;
 
-  final List<String> _tabs = ['الجديدة', 'قيد التنفيذ', 'المكتملة', 'الملغاة'];
+  final List<String> _tabs = ['الجديدة', 'المؤكدة', 'المكتملة', 'الملغاة'];
   final List<Color> _tabColors = [
     const Color(0xFF6C63FF),
     const Color(0xFFFF9800),
     const Color(0xFF4CAF50),
     const Color(0xFFE53935),
   ];
+
+  List<dynamic> _allJobs = [];
+  bool _isLoading = true;
+  String _craftsmanId = '';
 
   @override
   void initState() {
@@ -47,6 +50,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
 
     _fabController.forward();
     _headerController.forward();
+    _loadJobs();
   }
 
   @override
@@ -56,12 +60,30 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
     super.dispose();
   }
 
+  Future<void> _loadJobs() async {
+    setState(() => _isLoading = true);
+    try {
+      final id = await ApiService().getUserId();
+      if (id != null) {
+        _craftsmanId = id;
+        final list = await ApiService().getBookingsForCraftsman(id);
+        setState(() {
+          _allJobs = list;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading craftsman jobs: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
   String _getStatusFromTab(int tab) {
     switch (tab) {
       case 0:
         return 'new';
       case 1:
-        return 'in_progress';
+        return 'confirmed';
       case 2:
         return 'completed';
       case 3:
@@ -71,28 +93,34 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
     }
   }
 
+  List<dynamic> _getFilteredJobs() {
+    final status = _getStatusFromTab(_selectedTab);
+    return _allJobs.where((job) => job['status'] == status).toList();
+  }
+
   Future<void> _updateJobStatus(String jobId, String newStatus) async {
     try {
-      await FirebaseFirestore.instance
-          .collection('jobs')
-          .doc(jobId)
-          .update({'status': newStatus, 'updatedAt': FieldValue.serverTimestamp()});
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('تم تحديث حالة الطلب بنجاح', textAlign: TextAlign.right),
-            backgroundColor: Colors.green.shade400,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        );
+      final result = await ApiService().updateBookingStatus(jobId, newStatus);
+      if (result['success'] == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('تم تحديث حالة الطلب بنجاح', textAlign: TextAlign.right),
+              backgroundColor: Colors.green.shade400,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+        _loadJobs();
+      } else {
+        throw Exception(result['error'] ?? 'فشل التحديث');
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('حدث خطأ في التحديث', textAlign: TextAlign.right),
+            content: Text('حدث خطأ في التحديث: ${e.toString().replaceAll('Exception: ', '')}', textAlign: TextAlign.right),
             backgroundColor: Colors.red.shade400,
             behavior: SnackBarBehavior.floating,
           ),
@@ -103,176 +131,155 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
 
   @override
   Widget build(BuildContext context) {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
+    final filteredJobs = _getFilteredJobs();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-      body: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          // Custom App Bar with Animation
-          SliverAppBar(
-            expandedHeight: 180,
-            floating: false,
-            pinned: true,
-            backgroundColor: const Color(0xFF6C63FF),
-            flexibleSpace: FlexibleSpaceBar(
-              background: FadeTransition(
-                opacity: _headerAnimation,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        const Color(0xFF6C63FF),
-                        const Color(0xFF5A52D5),
-                        const Color(0xFF4A42C5),
+      body: RefreshIndicator(
+        onRefresh: _loadJobs,
+        color: const Color(0xFF6C63FF),
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+          slivers: [
+            // Custom App Bar with Animation
+            SliverAppBar(
+              expandedHeight: 180,
+              floating: false,
+              pinned: true,
+              backgroundColor: const Color(0xFF6C63FF),
+              flexibleSpace: FlexibleSpaceBar(
+                background: FadeTransition(
+                  opacity: _headerAnimation,
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0xFF6C63FF),
+                          Color(0xFF5A52D5),
+                          Color(0xFF4A42C5),
+                        ],
+                      ),
+                    ),
+                    child: Stack(
+                      children: [
+                        // Decorative circles
+                        Positioned(
+                          top: -50,
+                          right: -50,
+                          child: Container(
+                            width: 200,
+                            height: 200,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withOpacity(0.1),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          bottom: -30,
+                          left: -30,
+                          child: Container(
+                            width: 150,
+                            height: 150,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withOpacity(0.05),
+                            ),
+                          ),
+                        ),
+                        // Content
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              const Text(
+                                'طلبات العمل',
+                                style: TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'لديك ${_allJobs.length} طلب إجمالي',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.white.withOpacity(0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  child: Stack(
-                    children: [
-                      // Decorative circles
-                      Positioned(
-                        top: -50,
-                        right: -50,
-                        child: Container(
-                          width: 200,
-                          height: 200,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withOpacity(0.1),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: -30,
-                        left: -30,
-                        child: Container(
-                          width: 150,
-                          height: 150,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withOpacity(0.05),
-                          ),
-                        ),
-                      ),
-                      // Content
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            const Text(
-                              'طلبات العمل',
-                              style: TextStyle(
-                                fontSize: 32,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            StreamBuilder<QuerySnapshot>(
-                              stream: FirebaseFirestore.instance
-                                  .collection('jobs')
-                                  .where('craftsmanId', isEqualTo: userId)
-                                  .snapshots(),
-                              builder: (context, snapshot) {
-                                int total = snapshot.data?.docs.length ?? 0;
-                                return Text(
-                                  'لديك $total طلب',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.white.withOpacity(0.9),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ),
-          ),
 
-          // Tabs Section
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _TabsDelegate(
-              minHeight: 70,
-              maxHeight: 70,
-              child: Container(
-                color: const Color(0xFFF5F7FA),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  reverse: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: _tabs.length,
-                  itemBuilder: (context, index) {
-                    return _buildTabChip(index);
-                  },
-                ),
-              ),
-            ),
-          ),
-
-          // Jobs List
-          SliverPadding(
-            padding: const EdgeInsets.all(20),
-            sliver: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('jobs')
-                  .where('craftsmanId', isEqualTo: userId)
-                  .where('status', isEqualTo: _getStatusFromTab(_selectedTab))
-                  .orderBy('createdAt', descending: true)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return SliverFillRemaining(
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        color: _tabColors[_selectedTab],
-                      ),
-                    ),
-                  );
-                }
-
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return SliverFillRemaining(
-                    child: _buildEmptyState(),
-                  );
-                }
-
-                return SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final job = snapshot.data!.docs[index];
-                      return _buildJobCard(job, index);
+            // Tabs Section
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _TabsDelegate(
+                minHeight: 70,
+                maxHeight: 70,
+                child: Container(
+                  color: const Color(0xFFF5F7FA),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: _tabs.length,
+                    itemBuilder: (context, index) {
+                      return _buildTabChip(index);
                     },
-                    childCount: snapshot.data!.docs.length,
                   ),
-                );
-              },
+                ),
+              ),
             ),
-          ),
-        ],
+
+            // Jobs List
+            SliverPadding(
+              padding: const EdgeInsets.all(20),
+              sliver: _isLoading
+                  ? SliverFillRemaining(
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          color: _tabColors[_selectedTab],
+                        ),
+                      ),
+                    )
+                  : filteredJobs.isEmpty
+                      ? SliverFillRemaining(
+                          child: _buildEmptyState(),
+                        )
+                      : SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final job = filteredJobs[index];
+                              return _buildJobCard(job, index);
+                            },
+                            childCount: filteredJobs.length,
+                          ),
+                        ),
+            ),
+          ],
+        ),
       ),
       floatingActionButton: ScaleTransition(
         scale: _fabAnimation,
         child: FloatingActionButton.extended(
-          onPressed: () {
-            // Navigate to statistics or filters
-          },
+          onPressed: _loadJobs,
           backgroundColor: const Color(0xFF6C63FF),
           elevation: 8,
-          icon: const Icon(Icons.analytics_outlined),
-          label: const Text('إحصائيات'),
+          icon: const Icon(Icons.refresh),
+          label: const Text('تحديث'),
         ),
       ),
     );
@@ -332,9 +339,9 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
     );
   }
 
-  Widget _buildJobCard(DocumentSnapshot job, int index) {
-    final data = job.data() as Map<String, dynamic>;
-    final status = data['status'] ?? 'new';
+  Widget _buildJobCard(dynamic job, int index) {
+    final status = job['status'] ?? 'new';
+    final price = job['expectedPrice'] ?? job['price'] ?? 0;
 
     return TweenAnimationBuilder(
       duration: Duration(milliseconds: 300 + (index * 100)),
@@ -394,7 +401,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           Text(
-                            data['title'] ?? 'بدون عنوان',
+                            job['title'] ?? 'بدون عنوان',
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -403,7 +410,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            data['customerName'] ?? 'عميل',
+                            job['customerName'] ?? 'عميل',
                             style: TextStyle(
                               fontSize: 14,
                               color: Colors.grey.shade600,
@@ -418,7 +425,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                   
                   // Description
                   Text(
-                    data['description'] ?? 'لا يوجد وصف',
+                    job['description'] ?? 'لا يوجد وصف',
                     style: TextStyle(
                       fontSize: 14,
                       color: Colors.grey.shade700,
@@ -444,23 +451,25 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                             _buildActionButton(
                               icon: Icons.close,
                               color: Colors.red,
-                              onTap: () => _updateJobStatus(job.id, 'cancelled'),
+                              onTap: () => _updateJobStatus(job['_id'], 'cancelled'),
                             ),
                             const SizedBox(width: 8),
                             _buildActionButton(
                               icon: Icons.check,
                               color: Colors.green,
-                              onTap: () => _updateJobStatus(job.id, 'in_progress'),
+                              onTap: () => _updateJobStatus(job['_id'], 'confirmed'),
                             ),
                           ],
                         ),
-                      if (status == 'in_progress')
+                      if (status == 'confirmed')
                         _buildActionButton(
                           icon: Icons.done_all,
                           color: Colors.blue,
                           label: 'إكمال',
-                          onTap: () => _updateJobStatus(job.id, 'completed'),
+                          onTap: () => _updateJobStatus(job['_id'], 'completed'),
                         ),
+                      if (status != 'new' && status != 'confirmed')
+                        const SizedBox.shrink(),
                       
                       // Price & Date
                       Row(
@@ -468,7 +477,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                           Icon(Icons.access_time, size: 16, color: Colors.grey.shade400),
                           const SizedBox(width: 6),
                           Text(
-                            _formatDate(data['createdAt']),
+                            _formatDate(job['createdAt']),
                             style: TextStyle(
                               fontSize: 13,
                               color: Colors.grey.shade600,
@@ -484,7 +493,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              '${data['price'] ?? 0} ج.م',
+                              '$price ج.م',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
@@ -584,8 +593,8 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
     );
   }
 
-  void _showJobDetails(DocumentSnapshot job) {
-    final data = job.data() as Map<String, dynamic>;
+  void _showJobDetails(dynamic job) {
+    final price = job['expectedPrice'] ?? job['price'] ?? 0;
     
     showModalBottomSheet(
       context: context,
@@ -615,20 +624,23 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      data['title'] ?? 'بدون عنوان',
+                      job['title'] ?? 'بدون عنوان',
                       style: const TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     const SizedBox(height: 20),
-                    _buildDetailRow('العميل', data['customerName'] ?? 'غير محدد'),
-                    _buildDetailRow('السعر', '${data['price'] ?? 0} ج.م'),
-                    _buildDetailRow('التاريخ', _formatDate(data['createdAt'])),
-                    _buildDetailRow('الحالة', _getStatusText(data['status'])),
+                    _buildDetailRow('العميل', job['customerName'] ?? 'غير محدد'),
+                    _buildDetailRow('رقم العميل', job['customerPhone'] ?? 'غير محدد'),
+                    _buildDetailRow('الموقع/العنوان', job['location'] ?? 'غير محدد'),
+                    _buildDetailRow('السعر المتوقع', '$price ج.م'),
+                    _buildDetailRow('التاريخ المطلوب', _formatDate(job['appointmentDate'] ?? job['createdAt'])),
+                    _buildDetailRow('الوقت المطلوب', job['appointmentTime'] ?? 'غير محدد'),
+                    _buildDetailRow('الحالة', _getStatusText(job['status'])),
                     const SizedBox(height: 20),
                     const Text(
-                      'الوصف',
+                      'الوصف التفصيلي',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -636,7 +648,7 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      data['description'] ?? 'لا يوجد وصف',
+                      job['description'] ?? 'لا يوجد وصف',
                       style: TextStyle(
                         fontSize: 16,
                         color: Colors.grey.shade700,
@@ -683,8 +695,8 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
     switch (status) {
       case 'new':
         return 'جديد';
-      case 'in_progress':
-        return 'قيد التنفيذ';
+      case 'confirmed':
+        return 'مؤكد';
       case 'completed':
         return 'مكتمل';
       case 'cancelled':
@@ -697,8 +709,11 @@ class _CraftsmanJobsScreenState extends State<CraftsmanJobsScreen>
   String _formatDate(dynamic timestamp) {
     if (timestamp == null) return 'غير محدد';
     try {
-      final date = (timestamp as Timestamp).toDate();
-      return '${date.day}/${date.month}/${date.year}';
+      if (timestamp is String) {
+        final date = DateTime.parse(timestamp).toLocal();
+        return '${date.day}/${date.month}/${date.year}';
+      }
+      return timestamp.toString();
     } catch (e) {
       return 'غير محدد';
     }

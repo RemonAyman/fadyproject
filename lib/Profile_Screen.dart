@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'api_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -11,9 +10,6 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProviderStateMixin {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
@@ -47,25 +43,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   
   Future<void> _loadUserData() async {
     try {
-      User? user = _auth.currentUser;
-      if (user != null) {
-        DocumentSnapshot userDoc = await _firestore.collection('users').doc(user.uid).get();
-        
-        if (userDoc.exists) {
+      final userId = await ApiService().getUserId();
+      if (userId != null) {
+        final userDoc = await ApiService().getUserProfile(userId);
+        if (userDoc != null) {
           setState(() {
-            _userData = userDoc.data() as Map<String, dynamic>?;
-            _userData?['email'] = user.email;
-            _userData?['uid'] = user.uid;
-          });
-        } else {
-          // If no data in Firestore, use basic Firebase Auth data
-          setState(() {
-            _userData = {
-              'name': user.displayName ?? 'مستخدم',
-              'email': user.email,
-              'phone': user.phoneNumber ?? 'غير متوفر',
-              'uid': user.uid,
-            };
+            _userData = userDoc;
+            _userData?['uid'] = userId;
           });
         }
       }
@@ -82,7 +66,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
+        title: const Text(
           'تسجيل الخروج',
           textAlign: TextAlign.center,
           style: TextStyle(fontWeight: FontWeight.bold),
@@ -99,10 +83,12 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           ),
           ElevatedButton(
             onPressed: () async {
-              await _auth.signOut();
               SharedPreferences prefs = await SharedPreferences.getInstance();
               await prefs.setBool('isLoggedIn', false);
               await prefs.remove('userId');
+              await prefs.remove('userType');
+              await prefs.remove('token');
+              await prefs.remove('name');
               
               if (mounted) {
                 Navigator.pop(context);
@@ -115,7 +101,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: Text('تسجيل الخروج', style: TextStyle(color: Colors.white)),
+            child: const Text('تسجيل الخروج', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -553,11 +539,18 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     final nameController = TextEditingController(text: _userData?['name']);
     final phoneController = TextEditingController(text: _userData?['phone']);
     final addressController = TextEditingController(text: _userData?['address']);
+    String? selectedCity = _userData?['city'];
+    
+    final List<String> cities = [
+      'القاهرة', 'الجيزة', 'الإسكندرية', 'الشرقية', 'الدقهلية',
+      'البحيرة', 'الغربية', 'المنوفية', 'القليوبية', 'أخرى'
+    ];
     
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(
           'تعديل الملف الشخصي',
           textAlign: TextAlign.center,
@@ -592,9 +585,26 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 controller: addressController,
                 textAlign: TextAlign.right,
                 decoration: InputDecoration(
-                  labelText: 'العنوان',
+                  labelText: 'العنوان بالتفصيل',
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   prefixIcon: Icon(Icons.location_on_outlined),
+                ),
+              ),
+              SizedBox(height: 16),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: selectedCity,
+                    hint: Text('اختر المحافظة', textAlign: TextAlign.right),
+                    items: cities.map((c) => DropdownMenuItem(value: c, child: Text(c, textAlign: TextAlign.right))).toList(),
+                    onChanged: (v) => setStateDialog(() => selectedCity = v),
+                  ),
                 ),
               ),
             ],
@@ -608,19 +618,20 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           ElevatedButton(
             onPressed: () async {
               try {
-                User? user = _auth.currentUser;
-                if (user != null) {
-                  await _firestore.collection('users').doc(user.uid).set({
-                    'name': nameController.text,
-                    'phone': phoneController.text,
-                    'address': addressController.text,
-                  }, SetOptions(merge: true));
-                  
+                final userId = await ApiService().getUserId();
+                if (userId != null) {
+                  final data = {
+                    'name': nameController.text.trim(),
+                    'phone': phoneController.text.trim(),
+                    'city': selectedCity,
+                    'address': addressController.text.trim(),
+                  };
+                  await ApiService().updateUserProfile(userId, data);
                   await _loadUserData();
                   Navigator.pop(context);
                   
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
+                    const SnackBar(
                       content: Text('تم تحديث البيانات بنجاح'),
                       backgroundColor: Colors.green,
                     ),
@@ -628,7 +639,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 }
               } catch (e) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
+                  const SnackBar(
                     content: Text('حدث خطأ أثناء التحديث'),
                     backgroundColor: Colors.red,
                   ),
@@ -636,14 +647,15 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
               }
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Color(0xFF1565C0),
+              backgroundColor: const Color(0xFF1565C0),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: Text('حفظ', style: TextStyle(color: Colors.white)),
+            child: const Text('حفظ', style: TextStyle(color: Colors.white)),
           ),
         ],
+        ),
       ),
     );
   }

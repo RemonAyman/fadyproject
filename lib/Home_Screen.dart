@@ -1,7 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // =============================================================================
 // MODELS - محدثة مع الحقول الإضافية
@@ -105,16 +105,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadUserName() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      try {
-        final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-        if (userDoc.exists && mounted) { // إضافة شرط mounted لمنع الأخطاء
-          setState(() => _userName = userDoc.data()?['name'] ?? 'مستخدم');
-        }
-      } catch (e) {
-        print('Error loading user: $e');
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? name = prefs.getString('userName');
+      if (name != null && name.isNotEmpty && mounted) {
+        setState(() => _userName = name);
       }
+    } catch (e) {
+      print('Error loading user name: $e');
     }
   }
 
@@ -235,13 +233,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         
-        // قائمة الحرفيين من Firebase
-        StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('craftsmen')
-              .where('userType', isEqualTo: 'craftsman') // فلترة للحرفيين فقط
-              .where('isAvailable', isEqualTo: true) // عرض الحرفيين المتاحين فقط
-              .snapshots(),
+        FutureBuilder<List<dynamic>>(
+          future: ApiService().getAllCraftsmen(),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const SliverFillRemaining(
@@ -264,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             }
 
-            if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
               return const SliverFillRemaining(
                 child: Center(
                   child: Column(
@@ -281,8 +274,11 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             }
 
-            var craftsmen = snapshot.data!.docs.map((doc) {
-              return Craftsman.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+            var rawCraftsmen = snapshot.data!;
+            var craftsmen = rawCraftsmen.map((item) {
+              final map = item as Map<String, dynamic>;
+              final String docId = map['_id'] ?? '';
+              return Craftsman.fromMap(map, docId);
             }).toList();
 
             // فلترة حسب البحث والفئة
@@ -599,7 +595,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (confirm == true) {
-      await FirebaseAuth.instance.signOut();
+      await ApiService().logout();
       if (mounted) {
         Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       }
